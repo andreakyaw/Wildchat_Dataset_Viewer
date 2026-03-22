@@ -16,6 +16,8 @@ https://huggingface.co/datasets/allenai/WildChat-1M
 
 ## Setup Instructions
 
+Run all these commands in your terminal
+
 ### 1. Install dependencies
 pip install streamlit pandas pyarrow datasets
 
