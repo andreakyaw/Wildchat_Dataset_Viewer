@@ -6,133 +6,220 @@ import re
 st.set_page_config(layout="wide")
 st.title("WildChat Dataset Visualization Interface")
 
-#load data
+# ------------------------
+# LOAD DATA
+# ------------------------
 @st.cache_data
 def load_data():
-    return pd.read_parquet("data/parquet/chunk_0.parquet")
+    df = pd.read_parquet("data/parquet/chunk_0.parquet")
+    return df.head(10000)  # LIMIT SIZE FOR SPEED
 
 df = load_data()
 
-# Format Conversation Column
-def format_conv(conv):
+# ------------------------
+# PATTERNS
+# ------------------------
+VERIFICATION_PATTERN = re.compile(
+    r"\b(verify|validation|confirm|check|accurate|correct|citation|source|evidence|proof|are you sure)\b",
+    flags=re.IGNORECASE
+)
+
+TOPIC_PATTERNS = {
+    "Psychology": re.compile(r"\b(psychology|therapy|mental health|anxiety|depression|stress|emotion)\b", re.I),
+    "Medicine": re.compile(r"\b(doctor|patient|diagnosis|symptom|treatment|medical|medicine|medication|disease)\b", re.I),
+    "Law": re.compile(r"\b(legal|lawyer|court|judge|contract|lawsuit|crime|police)\b", re.I),
+}
+
+# ------------------------
+# HELPERS
+# ------------------------
+def normalize_conversation(conv):
     try:
         if hasattr(conv, "to_pylist"):
             conv = conv.to_pylist()
+        elif hasattr(conv, "tolist") and not isinstance(conv, (list, dict, str)):
+            conv = conv.tolist()
 
         if isinstance(conv, str):
             conv = json.loads(conv)
 
-        return "\n\n".join(
-            f"{msg.get('role','')}: {msg.get('content','')}"
-            for msg in conv if isinstance(msg, dict)
-        )
+        if isinstance(conv, list):
+            return [msg for msg in conv if isinstance(msg, dict)]
     except:
-        return str(conv)
+        pass
+    return []
 
-#format columns
-def format_json(obj):
-    try:
-        if hasattr(obj, "to_pylist"):
-            obj = obj.to_pylist()
-        if hasattr(obj, "as_py"):
-            obj = obj.as_py()
+def get_user_turn_text(conv):
+    return "\n\n".join(
+        msg.get("content", "")
+        for msg in conv if msg.get("role") == "user"
+    )
 
-        if isinstance(obj, list) and len(obj) > 0:
-            obj = obj[0]
+def has_verification_language(text):
+    return bool(VERIFICATION_PATTERN.search(text)) if isinstance(text, str) else False
 
-        if isinstance(obj, dict):
-            return ", ".join(f"{k}:{v}" for k, v in obj.items())
+def detect_topic_multi(text):
+    matches = []
+    for topic, pattern in TOPIC_PATTERNS.items():
+        if isinstance(text, str) and pattern.search(text):
+            matches.append(topic)
+    return matches if matches else ["Psychology"]
 
-        return str(obj)
-    except:
-        return str(obj)
-
-# Apply formatting
-df["conversation"] = df["conversation"].apply(format_conv)
-df["openai_moderation"] = df["openai_moderation"].apply(format_json)
-df["detoxify_moderation"] = df["detoxify_moderation"].apply(format_json)
-
-#filter
-st.sidebar.header("Filters")
-
-language = st.sidebar.selectbox(
-    "Language",
-    options=df["language"].dropna().unique()
-)
-
-model = st.sidebar.selectbox(
-    "Model",
-    options=df["model"].dropna().unique()
-)
-#Keyword search input
-keyword = st.sidebar.text_input("Search keyword (in conversation)")
-use_regex = st.sidebar.checkbox("Use regex")
-
-filtered_df = df[
-    (df["language"] == language) &
-    (df["model"] == model)
-].copy()
-
-if keyword:
-    filtered_df = filtered_df[
-        filtered_df["conversation"].str.contains(
-            keyword,
-            case=False,
-            na=False,
-            regex=use_regex
-        )
-    ]
-
-#Keyword
 def highlight_keyword(text, keyword):
     if not keyword or not isinstance(text, str):
         return text
     return re.sub(
         f"({re.escape(keyword)})",
-        r"**\1**",
+        r"<span style='background-color:yellow; color:black;'>\1</span>",
         text,
         flags=re.IGNORECASE
     )
 
-if keyword:
-    filtered_df["conversation"] = filtered_df["conversation"].apply(
-        lambda x: highlight_keyword(x, keyword)
+# ------------------------
+# PROCESS DATA (CACHED)
+# ------------------------
+@st.cache_data
+def process_data(df):
+    df = df.copy()
+    df["raw_conversation"] = df["conversation"].apply(normalize_conversation)
+    df["user_text"] = df["raw_conversation"].apply(get_user_turn_text)
+    df["has_verification_language"] = df["user_text"].apply(has_verification_language)
+    df["topics_list"] = df["user_text"].apply(detect_topic_multi)
+
+    exploded_df = df.explode("topics_list")
+    exploded_df["topic"] = exploded_df["topics_list"]
+
+    return df, exploded_df
+
+df, exploded_df = process_data(df)
+
+# ------------------------
+# FILTERING (CACHED)
+# ------------------------
+@st.cache_data
+def filter_data(df, language, model, keyword, topic_filter):
+    filtered = df
+
+    if language != "All":
+        filtered = filtered[filtered["language"] == language]
+
+    if model != "All":
+        filtered = filtered[filtered["model"] == model]
+
+    if keyword:
+        filtered = filtered[
+            filtered["user_text"].str.contains(keyword, case=False, na=False)
+        ]
+
+    if topic_filter != "All":
+        filtered = filtered[
+            filtered["topics_list"].apply(lambda x: topic_filter in x)
+        ]
+
+    return filtered
+
+# ------------------------
+# SIDEBAR FILTERS
+# ------------------------
+st.sidebar.header("Filters")
+
+language = st.sidebar.selectbox("Language", ["All"] + sorted(df["language"].dropna().unique()))
+model = st.sidebar.selectbox("Model", ["All"] + sorted(df["model"].dropna().unique()))
+keyword = st.sidebar.text_input("Search keyword")
+
+topic_filter = st.sidebar.selectbox(
+    "Field",
+    ["All", "Psychology", "Medicine", "Law"]
+)
+
+filtered_df = filter_data(df, language, model, keyword, topic_filter)
+
+# ------------------------
+# CHARTS (CACHED)
+# ------------------------
+@st.cache_data
+def compute_field_counts(exploded_df):
+    return exploded_df["topic"].value_counts()
+
+@st.cache_data
+def compute_validation(exploded_df):
+    return (
+        exploded_df.groupby("topic")["has_verification_language"]
+        .mean()
+        .mul(100)
     )
 
-#charts
-col1, col2 = st.columns(2)
+st.subheader("Field Distribution")
+st.bar_chart(compute_field_counts(exploded_df))
 
-with col1:
-    st.subheader("Language Distribution")
-    st.bar_chart(df["language"].value_counts())
+st.subheader("Verification Behavior by Field")
+st.bar_chart(compute_validation(exploded_df))
 
-with col2:
-    st.subheader("Model Usage")
-    st.bar_chart(df["model"].value_counts())
+# ------------------------
+# CHAT RENDERER
+# ------------------------
+def render_conversation(conv, keyword=None):
+    conv = normalize_conversation(conv)
 
-#convo len
-filtered_df.loc[:, "conversation_length"] = filtered_df["conversation"].apply(
-    lambda x: x.count("\n") if isinstance(x, str) else 0
-)
+    st.markdown('<div style="max-height:500px; overflow-y:auto;">', unsafe_allow_html=True)
 
-st.subheader("Conversation Length Distribution")
-st.bar_chart(filtered_df["conversation_length"].value_counts().sort_index())
+    for msg in conv:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
 
-#count how many results 
-st.write(f"Results found: {len(filtered_df)}")
+        if keyword:
+            content = highlight_keyword(content, keyword)
 
-#data
-st.subheader("Filtered Conversations")
+        if role == "user":
+            st.markdown(f"""
+                <div style="
+                    background-color:#dbeafe;
+                    color:#111827;
+                    padding:14px;
+                    border-radius:14px;
+                    margin-bottom:12px;
+                    max-width:700px;
+                    font-size:15px;
+                ">
+                👤 <b>User</b><br><br>{content}
+                </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+                <div style="
+                    background-color:#e5e7eb;
+                    color:#111827;
+                    padding:14px;
+                    border-radius:14px;
+                    margin-bottom:12px;
+                    margin-left:auto;
+                    max-width:700px;
+                    font-size:15px;
+                ">
+                🤖 <b>Assistant</b><br><br>{content}
+                </div>
+            """, unsafe_allow_html=True)
 
-st.dataframe(
-    filtered_df[
-        [
-            "conversation",
-            "language",
-            "model",
-            "toxic",
-            "openai_moderation",
-            "detoxify_moderation"
-        ]
-    ].head(50)
-)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ------------------------
+# PAGINATION (BIG SPEED BOOST)
+# ------------------------
+st.subheader("Conversations")
+
+page_size = 5
+page = st.number_input("Page", min_value=1, value=1)
+
+start = (page - 1) * page_size
+end = start + page_size
+
+subset = filtered_df.iloc[start:end]
+
+st.write(f"Showing {start} - {end} of {len(filtered_df)} results")
+
+for i, row in subset.iterrows():
+    topics = ", ".join(row["topics_list"])
+
+    with st.expander(f"Conversation {i} | {topics}"):
+        st.markdown(f"**Field(s):** {topics}")
+        render_conversation(row["raw_conversation"], keyword)
