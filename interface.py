@@ -193,6 +193,7 @@ def apply_filters(
 
 
 filtered_df = apply_filters(df, sel_model, sel_keyword, sel_topic, show_only_verified)
+
 #render a conversation in chat bubbles
 def render_conversation(conv: list, keyword: str = "", user_only: bool = True):
     st.markdown(
