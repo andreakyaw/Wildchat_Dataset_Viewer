@@ -26,3 +26,5 @@ python scripts/download_dataset.py
 
 ### 3. Run the interface
 python -m streamlit run interface.py
+OR
+python -m streamlit run field_dashboard.py
