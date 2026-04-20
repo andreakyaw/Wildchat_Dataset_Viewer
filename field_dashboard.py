@@ -10,6 +10,7 @@ Run:
 
 import json
 import re
+from html import escape
 from pathlib import Path
 
 import pandas as pd
@@ -39,15 +40,15 @@ FIELD_COLORS = {
 }
 
 CLINICAL_SIGNAL_LABELS = {
-    # Psychology
+    #Psychology
     "active_care_terms":       "Active care terms",
     "provider_roles":          "Provider / patient roles",
     "symptom_discussion":      "Symptom discussion",
     "documentation_language":  "Documentation language",
-    # Medicine
+    #Medicine
     "care_setting":            "Care setting",
     "patient_and_symptoms":    "Patient & symptoms",
-    # Law
+    #Law
     "health_law_context":      "Health-law context",
     "casework_language":       "Casework language",
     "advice_request":          "Advice request",
@@ -89,6 +90,19 @@ def pct(n, total):
     if total == 0:
         return "0%"
     return f"{n / total * 100:.1f}%"
+
+
+def render_text_box(text: str, background: str, max_chars: int, max_height: int) -> None:
+    snippet = (text or "")[:max_chars]
+    safe_text = escape(snippet).replace("\n", "<br>")
+    ellipsis = "…" if len(text or "") > max_chars else ""
+    st.markdown(
+        f'<div style="background:{background};color:#0f172a;padding:12px 16px;'
+        f'border:1px solid #cbd5e1;border-radius:8px;font-size:14px;line-height:1.65;'
+        f'white-space:normal;max-height:{max_height}px;overflow-y:auto;">'
+        f'{safe_text}{ellipsis}</div>',
+        unsafe_allow_html=True,
+    )
 
 
 def signal_breakdown(df: pd.DataFrame) -> pd.DataFrame:
@@ -149,13 +163,11 @@ if view == "Overview (all fields)":
         n = len(df)
         clinical_n = int(df["is_clinical_work"].sum())
         verif_n    = int(df["has_verification"].sum()) if "has_verification" in df.columns else 0
-        toxic_n    = int(df["toxic"].sum()) if "toxic" in df.columns else 0
         combined_rows.append({
             "Field":    field,
             "Posts":    n,
             "Clinical": clinical_n,
             "Verif.":   verif_n,
-            "Toxic":    toxic_n,
             "Clinical %": round(clinical_n / n * 100, 1) if n else 0,
         })
 
@@ -183,7 +195,7 @@ if view == "Overview (all fields)":
         .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
         .encode(
             x=alt.X("Field:N", axis=alt.Axis(labelAngle=0)),
-            y=alt.Y("Clinical %:Q", scale=alt.Scale(domain=[0, 100]),
+            y=alt.Y("Clinical %:Q", scale=alt.Scale(domain=[0, 20]),
                     title="% flagged as clinical work"),
             color=alt.Color(
                 "Field:N",
@@ -199,55 +211,7 @@ if view == "Overview (all fields)":
     )
     st.altair_chart(c_chart, use_container_width=True)
 
-    #post breakdown stacked bar
-    st.subheader("Posts breakdown")
-    stacked_rows = []
-    for row in combined_rows:
-        non_clinical = row["Posts"] - row["Clinical"]
-        stacked_rows.append({"Field": row["Field"], "Category": "Clinical", "n": row["Clinical"]})
-        stacked_rows.append({"Field": row["Field"], "Category": "General", "n": non_clinical})
-
-    stacked_df = pd.DataFrame(stacked_rows)
-    stacked_chart = (
-        alt.Chart(stacked_df)
-        .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
-        .encode(
-            x=alt.X("Field:N", axis=alt.Axis(labelAngle=0)),
-            y=alt.Y("n:Q", title="number of posts"),
-            color=alt.Color(
-                "Category:N",
-                scale=alt.Scale(domain=["Clinical", "General"], range=["#7F77DD", "#D3D1C7"]),
-            ),
-            tooltip=["Field", "Category", "n"],
-        )
-        .properties(height=280)
-    )
-    st.altair_chart(stacked_chart, use_container_width=True)
-
-    # heat map
-    st.subheader("Top models across all fields")
-    model_rows = []
-    for field, df in all_dfs.items():
-        if df.empty:
-            continue
-        for model, cnt in df["model"].value_counts().head(8).items():
-            model_rows.append({"Field": field, "Model": model, "Count": int(cnt)})
-
-    if model_rows:
-        model_df = pd.DataFrame(model_rows)
-        heat = (
-            alt.Chart(model_df)
-            .mark_rect()
-            .encode(
-                x=alt.X("Field:N", axis=alt.Axis(labelAngle=0)),
-                y=alt.Y("Model:N", sort="-x"),
-                color=alt.Color("Count:Q", scale=alt.Scale(scheme="purples")),
-                tooltip=["Field", "Model", "Count"],
-            )
-            .properties(height=320)
-        )
-        st.altair_chart(heat, use_container_width=True)
-
+    
     # verification language presence
     st.subheader("Verification language presence")
     verif_rows = []
@@ -295,18 +259,16 @@ else:
     n          = len(df)
     clinical_n = int(df["is_clinical_work"].sum()) if "is_clinical_work" in df.columns else 0
     verif_n    = int(df["has_verification"].sum())  if "has_verification" in df.columns else 0
-    toxic_n    = int(df["toxic"].sum())              if "toxic" in df.columns else 0
 
     color = FIELD_COLORS[field]
 
     st.subheader(f"{field} — {n:,} posts")
 
     #metrics cards
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3 = st.columns(3)
     m1.metric("Total posts",        f"{n:,}")
     m2.metric("Clinical work",      f"{clinical_n:,}",  delta=pct(clinical_n, n))
     m3.metric("Verification lang.", f"{verif_n:,}",     delta=pct(verif_n, n))
-    m4.metric("Toxic",              f"{toxic_n:,}",     delta=pct(toxic_n, n))
 
     st.markdown("---")
 
@@ -337,7 +299,7 @@ else:
 
     #clinical signal for comments flagged as clinical work
     with right:
-        st.markdown("**What clinical work looks like — signal breakdown**")
+        st.markdown("**What clinical work looks like signal breakdown**")
         sig_df = signal_breakdown(df[df["is_clinical_work"]] if "is_clinical_work" in df.columns else df)
         if sig_df.empty:
             st.caption("No clinical-work posts found.")
@@ -355,27 +317,6 @@ else:
             )
             st.altair_chart(sig_chart, use_container_width=True)
 
-    st.markdown("---")
-
-    #clinical signal co-occurrence or how many signals per post
-    st.subheader("Signal depth — how many clinical signals per post?")
-    if "clinical_signals" in df.columns:
-        signal_count_df = df["clinical_signals"].apply(len).value_counts().reset_index()
-        signal_count_df.columns = ["num_signals", "posts"]
-        signal_count_df = signal_count_df.sort_values("num_signals")
-        signal_count_df["num_signals"] = signal_count_df["num_signals"].astype(str)
-        sig_depth = (
-            alt.Chart(signal_count_df)
-            .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
-            .encode(
-                x=alt.X("num_signals:O", title="number of clinical signals matched", axis=alt.Axis(labelAngle=0)),
-                y=alt.Y("posts:Q", title="number of posts"),
-                color=alt.value(color),
-                tooltip=["num_signals", "posts"],
-            )
-            .properties(height=220)
-        )
-        st.altair_chart(sig_depth, use_container_width=True)
 
     st.markdown("---")
     left2, right2 = st.columns([1, 1])
@@ -436,12 +377,7 @@ else:
             with st.expander(f"Signals: {signals}  |  Model: {row.get('model', 'N/A')}"):
                 st.caption(row.get("clinical_summary", ""))
                 user_text = row.get("user_text", "")
-                st.markdown(
-                    f'<div style="background:#f3f4f6;padding:12px 16px;border-radius:8px;'
-                    f'font-size:14px;line-height:1.65;max-height:320px;overflow-y:auto;">'
-                    f'{user_text[:2000]}{"…" if len(user_text) > 2000 else ""}</div>',
-                    unsafe_allow_html=True,
-                )
+                render_text_box(user_text, background="#f8fafc", max_chars=2000, max_height=320)
 
     st.markdown("---")
 
@@ -463,14 +399,9 @@ else:
         signals = ", ".join(
             CLINICAL_SIGNAL_LABELS.get(s, s) for s in row.get("clinical_signals", [])
         ) or "none"
-        clin_badge  = "🔬 clinical"  if row.get("is_clinical_work") else "general"
+        clin_badge  = f"{field} · clinical" if row.get("is_clinical_work") else field
         verif_badge = " · ✓ verif"  if row.get("has_verification") else ""
         label = f"{clin_badge}{verif_badge}  |  {row.get('model','?')}  |  signals: {signals}"
         with st.expander(label):
             user_text = row.get("user_text", "")
-            st.markdown(
-                f'<div style="background:#dbeafe;padding:12px 16px;border-radius:8px;'
-                f'font-size:14px;line-height:1.65;max-height:280px;overflow-y:auto;">'
-                f'{user_text[:1500]}{"…" if len(user_text) > 1500 else ""}</div>',
-                unsafe_allow_html=True,
-            )
+            render_text_box(user_text, background="#eff6ff", max_chars=1500, max_height=280)
