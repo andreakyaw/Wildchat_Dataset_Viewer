@@ -26,6 +26,9 @@ python scripts/download_dataset.py
 
 ### 3. Run the filter interface
 python -m streamlit run interface.py
+
 OR
+
 For the filter with individual data
+
 python -m streamlit run field_dashboard.py
